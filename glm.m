@@ -214,8 +214,15 @@ savefig(fig, [outName '.fig']);
 exportgraphics(fig, [outName '.png'], 'Resolution',300);
 %% Compare raw vs GLM reconstruction (per day, multi-channel, color shade)
 
-title_all = ['bkA OS'; 'bkV OS'; 'bkA SO'; 'bkV SO'; 'bkA OO'; 'bkV OO'];
+title_all = ['bkV OS'; ...
+             'bkA OS'; ...
+             'bkV SO'; ...
+             'bkA SO'; ...
+             'bkV OO'; ...
+             'bkA OO'];
+
 block_id  = [1,2,1,2,1,2];
+
 trial_all = [12,12,21,21,11,11];
 
 chList = [1 2 4];
@@ -355,8 +362,15 @@ sgtitle('Raw LFP: Mean ± SEM across days');
 
 %% Compare raw vs GLM reconstruction (all pooled trials, multi-channel)
 
-title_all = ['bkA OS'; 'bkV OS'; 'bkA SO'; 'bkV SO'; 'bkA OO'; 'bkV OO'];
+title_all = ['bkV OS'; ...
+             'bkA OS'; ...
+             'bkV SO'; ...
+             'bkA SO'; ...
+             'bkV OO'; ...
+             'bkA OO'];
+
 block_id  = [1,2,1,2,1,2];
+
 trial_all = [12,12,21,21,11,11];
 
 chList = [1 2 4];
@@ -410,7 +424,15 @@ savefig(fig, strrep(outName,'.png','.fig'));
 %% Daily prediction error mean ± SEM across days
 %% Daily relative prediction error ± SEM (fixed legend)
 
+title_all = ['bkV OS'; ...
+             'bkA OS'; ...
+             'bkV SO'; ...
+             'bkA SO'; ...
+             'bkV OO'; ...
+             'bkA OO'];
+
 block_id  = [1,2,1,2,1,2];
+
 trial_all = [12,12,21,21,11,11];
 
 chList = [1 2 4];
@@ -999,8 +1021,15 @@ for ch = 1:nCh
 end
 %% Plot raw vs global-only reconstruction
 
-title_all = ['bkA OS'; 'bkV OS'; 'bkA SO'; 'bkV SO'; 'bkA OO'; 'bkV OO'];
+title_all = ['bkV OS'; ...
+             'bkA OS'; ...
+             'bkV SO'; ...
+             'bkA SO'; ...
+             'bkV OO'; ...
+             'bkA OO'];
+
 block_id  = [1,2,1,2,1,2];
+
 trial_all = [12,12,21,21,11,11];
 
 chList = [1 2 4];
