@@ -863,6 +863,93 @@ end
 regressor_names_global = [regressor_names, {'Global activity'}];
 
 BETA_global = mean(BETA_global_cv,4,'omitnan');
+%% Plot beta kernels: each channel separately
+
+BETA_plot = BETA_global;  % or BETA / mean(BETA_cv,4,'omitnan')
+names_plot = regressor_names_global;  % or regressor_names
+
+chList = [1 2 4];
+colors = lines(length(names_plot));
+
+fig = figure('Visible','on');
+
+for ci = 1:length(chList)
+
+    ch = chList(ci);
+
+    subplot(length(chList),1,ci); hold on
+
+    h = gobjects(length(names_plot),1);
+
+    for r = 1:length(names_plot)
+        h(r) = plot(time_axis, squeeze(BETA_plot(ch,r,:)), ...
+            'Color', colors(r,:), ...
+            'LineWidth', 1.4);
+    end
+
+    xline(0,'k--');
+    yline(0,'k:');
+
+    title(sprintf('Channel %d', ch));
+    xlabel('Time from stimulus onset (s)');
+    ylabel('Beta');
+
+    if ci == 1
+        legend(h, names_plot, 'Location','best');
+    end
+end
+
+sgtitle('GLM beta kernels by channel');
+
+outName = 'GLM_beta_by_channel';
+savefig(fig,[outName '.fig']);
+exportgraphics(fig,[outName '.png'],'Resolution',300);
+%% Plot global activity waveform
+
+chList = [1 2 4];
+
+for ci = 1:length(chList)
+
+    ch = chList(ci);
+
+    otherCh = setdiff(1:nCh,ch);
+
+    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));
+    % GLOBAL: trial x time
+
+    global_mu = mean(GLOBAL,1,'omitnan');
+
+    global_sem = std(GLOBAL,0,1,'omitnan') ...
+                 / sqrt(size(GLOBAL,1));
+
+    fig = figure('Visible','on');
+    hold on
+
+    fill([time_axis fliplr(time_axis)], ...
+         [global_mu+global_sem ...
+          fliplr(global_mu-global_sem)], ...
+         [0.6 0.6 0.6], ...
+         'FaceAlpha',0.3, ...
+         'EdgeColor','none');
+
+    plot(time_axis, global_mu, ...
+        'k', ...
+        'LineWidth',2);
+
+    xline(0,'k--');
+
+    xlabel('Time from stimulus onset (s)');
+    ylabel('Global activity');
+
+    title(sprintf('Global activity regressor (predicting Ch %d)', ch));
+
+    %% save
+    outName = sprintf('GlobalActivity_predictCh%d', ch);
+
+    savefig(fig,[outName '.fig']);
+    exportgraphics(fig,[outName '.png'], ...
+        'Resolution',300);
+end
 %% Compare R2 before vs after adding global activity
 
 figure; hold on
@@ -879,3 +966,34 @@ xlabel('Time from stimulus onset (s)');
 ylabel('\Delta CV R^2');
 legend(arrayfun(@(x) sprintf('Ch %d',x), chList, 'UniformOutput',false));
 title('R2 improvement after adding global activity');
+%% Reconstruct using global activity term only
+
+BETA_global = mean(BETA_global_cv,4,'omitnan');
+
+r_intercept = 1;
+r_global = length(regressor_names_global);
+
+YHAT_globalOnly = nan(nCh,nTrial,nTime);
+YHAT_interceptGlobal = nan(nCh,nTrial,nTime);
+
+for ch = 1:nCh
+
+    otherCh = setdiff(1:nCh,ch);
+    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));  % trial x time
+
+    for tt = 1:nTime
+
+        global_t = GLOBAL(:,tt);
+        global_t = zscore(global_t);
+        global_t = global_t(:);
+
+        beta0 = BETA_global(ch,r_intercept,tt);
+        betaG = BETA_global(ch,r_global,tt);
+
+        % global contribution only
+        YHAT_globalOnly(ch,:,tt) = betaG .* global_t;
+
+        % intercept + global contribution
+        YHAT_interceptGlobal(ch,:,tt) = beta0 + betaG .* global_t;
+    end
+end

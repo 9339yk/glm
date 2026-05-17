@@ -904,6 +904,52 @@ sgtitle('GLM beta kernels by channel');
 outName = 'GLM_beta_by_channel';
 savefig(fig,[outName '.fig']);
 exportgraphics(fig,[outName '.png'],'Resolution',300);
+%% Plot global activity waveform
+
+chList = [1 2 4];
+
+for ci = 1:length(chList)
+
+    ch = chList(ci);
+
+    otherCh = setdiff(1:nCh,ch);
+
+    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));
+    % GLOBAL: trial x time
+
+    global_mu = mean(GLOBAL,1,'omitnan');
+
+    global_sem = std(GLOBAL,0,1,'omitnan') ...
+                 / sqrt(size(GLOBAL,1));
+
+    fig = figure('Visible','on');
+    hold on
+
+    fill([time_axis fliplr(time_axis)], ...
+         [global_mu+global_sem ...
+          fliplr(global_mu-global_sem)], ...
+         [0.6 0.6 0.6], ...
+         'FaceAlpha',0.3, ...
+         'EdgeColor','none');
+
+    plot(time_axis, global_mu, ...
+        'k', ...
+        'LineWidth',2);
+
+    xline(0,'k--');
+
+    xlabel('Time from stimulus onset (s)');
+    ylabel('Global activity');
+
+    title(sprintf('Global activity regressor (predicting Ch %d)', ch));
+
+    %% save
+    outName = sprintf('GlobalActivity_predictCh%d', ch);
+
+    savefig(fig,[outName '.fig']);
+    exportgraphics(fig,[outName '.png'], ...
+        'Resolution',300);
+end
 %% Compare R2 before vs after adding global activity
 
 figure; hold on
@@ -920,3 +966,87 @@ xlabel('Time from stimulus onset (s)');
 ylabel('\Delta CV R^2');
 legend(arrayfun(@(x) sprintf('Ch %d',x), chList, 'UniformOutput',false));
 title('R2 improvement after adding global activity');
+%% Reconstruct using global activity term only
+
+BETA_global = mean(BETA_global_cv,4,'omitnan');
+
+r_intercept = 1;
+r_global = length(regressor_names_global);
+
+YHAT_globalOnly = nan(nCh,nTrial,nTime);
+YHAT_interceptGlobal = nan(nCh,nTrial,nTime);
+
+for ch = 1:nCh
+
+    otherCh = setdiff(1:nCh,ch);
+    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));  % trial x time
+
+    for tt = 1:nTime
+
+        global_t = GLOBAL(:,tt);
+        global_t = zscore(global_t);
+        global_t = global_t(:);
+
+        beta0 = BETA_global(ch,r_intercept,tt);
+        betaG = BETA_global(ch,r_global,tt);
+
+        % global contribution only
+        YHAT_globalOnly(ch,:,tt) = betaG .* global_t;
+
+        % intercept + global contribution
+        YHAT_interceptGlobal(ch,:,tt) = beta0 + betaG .* global_t;
+    end
+end
+%% Plot raw vs global-only reconstruction
+
+title_all = ['bkA OS'; 'bkV OS'; 'bkA SO'; 'bkV SO'; 'bkA OO'; 'bkV OO'];
+block_id  = [1,2,1,2,1,2];
+trial_all = [12,12,21,21,11,11];
+
+chList = [1 2 4];
+colors = lines(length(chList));
+
+fig = figure('Visible','on');
+
+for id = 1:6
+    subplot(3,2,id); hold on
+
+    for ci = 1:length(chList)
+        ch = chList(ci);
+
+        idx = BLOCK==block_id(id) & CLASS==trial_all(id);
+
+        if sum(idx) < 5
+            continue
+        end
+
+        raw_mu = squeeze(mean(Y(ch,idx,:),2,'omitnan'));
+        glob_mu = squeeze(mean(YHAT_interceptGlobal(ch,idx,:),2,'omitnan'));
+
+        plot(time_axis, raw_mu, ...
+            'Color', colors(ci,:), ...
+            'LineWidth', 1.5);
+
+        plot(time_axis, glob_mu, ...
+            'Color', colors(ci,:) + (1-colors(ci,:))*0.6, ...
+            'LineWidth', 1.5);
+    end
+
+    xline(0,'k--');
+    title(title_all(id,:));
+    xlabel('Time (s)');
+    ylabel('LFP');
+
+    if id == 1
+        legend({'Ch1 raw','Ch1 global', ...
+                'Ch2 raw','Ch2 global', ...
+                'Ch4 raw','Ch4 global'}, ...
+                'Location','best');
+    end
+end
+
+sgtitle('Raw vs intercept + global-only reconstruction');
+
+outName = 'GlobalOnly_reconstruction';
+savefig(fig,[outName '.fig']);
+exportgraphics(fig,[outName '.png'],'Resolution',300);
