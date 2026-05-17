@@ -863,47 +863,6 @@ end
 regressor_names_global = [regressor_names, {'Global activity'}];
 
 BETA_global = mean(BETA_global_cv,4,'omitnan');
-%% Plot beta kernels: each channel separately
-
-BETA_plot = BETA_global;  % or BETA / mean(BETA_cv,4,'omitnan')
-names_plot = regressor_names_global;  % or regressor_names
-
-chList = [1 2 4];
-colors = lines(length(names_plot));
-
-fig = figure('Visible','on');
-
-for ci = 1:length(chList)
-
-    ch = chList(ci);
-
-    subplot(length(chList),1,ci); hold on
-
-    h = gobjects(length(names_plot),1);
-
-    for r = 1:length(names_plot)
-        h(r) = plot(time_axis, squeeze(BETA_plot(ch,r,:)), ...
-            'Color', colors(r,:), ...
-            'LineWidth', 1.4);
-    end
-
-    xline(0,'k--');
-    yline(0,'k:');
-
-    title(sprintf('Channel %d', ch));
-    xlabel('Time from stimulus onset (s)');
-    ylabel('Beta');
-
-    if ci == 1
-        legend(h, names_plot, 'Location','best');
-    end
-end
-
-sgtitle('GLM beta kernels by channel');
-
-outName = 'GLM_beta_by_channel';
-savefig(fig,[outName '.fig']);
-exportgraphics(fig,[outName '.png'],'Resolution',300);
 %% Compare R2 before vs after adding global activity
 
 figure; hold on
