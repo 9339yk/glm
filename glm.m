@@ -1004,3 +1004,216 @@ savefig(fig, ...
 exportgraphics(fig, ...
     fullfile(figDir,[outName '.png']), ...
     'Resolution',300);
+%% 1) Variance partitioning: condition-only vs condition + gamma
+
+Y = X;   % channel x trial x time
+
+nCh = size(Y,1);
+nTrial = size(Y,2);
+nTime = size(Y,3);
+nReg = size(Xcond,2);
+
+YHAT_condOnly = nan(nCh,nTrial,nTime);
+R2_condOnly = nan(nCh,nTime);
+
+for tt = 1:nTime
+    Ytt = squeeze(Y(:,:,tt))';   % trial x channel
+
+    validTrial = all(~isnan(Ytt),2) & all(~isnan(Xcond),2);
+    Xv = Xcond(validTrial,:);
+    Yv = Ytt(validTrial,:);
+
+    if sum(validTrial) <= nReg
+        continue
+    end
+
+    B = Xv \ Yv;                 % regressor x channel
+    Yhat_v = Xv * B;             % trial x channel
+
+    YHAT_condOnly(:,validTrial,tt) = Yhat_v';
+
+    for ch = 1:nCh
+        y = Ytt(validTrial,ch);
+        yhat = Yhat_v(:,ch);
+
+        R2_condOnly(ch,tt) = 1 - sum((y-yhat).^2) / ...
+                                  sum((y-mean(y)).^2);
+    end
+end
+
+Delta_R2_gamma = R2_joint - R2_condOnly;
+%% Plot gamma contribution
+
+chList = [1 2 4];
+
+fig = figure('Visible','on'); hold on
+
+for ch = chList
+    plot(time_axis, Delta_R2_gamma(ch,:), 'LineWidth',1.5);
+end
+
+yline(0,'k--');
+xline(0,'k--');
+
+xlabel('Time from stimulus onset (s)');
+ylabel('\Delta R^2');
+title('Variance explained by shared trial gamma');
+legend(arrayfun(@(x) sprintf('Ch %d',x), chList, 'UniformOutput',false));
+
+outName = 'VariancePartitioning_GammaContribution';
+savefig(fig, fullfile(figDir,[outName '.fig']));
+exportgraphics(fig, fullfile(figDir,[outName '.png']), 'Resolution',300);
+%% 2) Component reconstruction
+
+YHAT_gammaOnly = nan(nCh,nTrial,nTime);
+YHAT_condOnly_fromJoint = nan(nCh,nTrial,nTime);
+
+for tt = 1:nTime
+    Ytt = squeeze(Y(:,:,tt))';  % trial x channel
+
+    validTrial = all(~isnan(Ytt),2) & all(~isnan(Xcond),2);
+
+    Xv = Xcond(validTrial,:);
+    B = squeeze(Beta_cond(:,:,tt))';  % regressor x channel
+
+    gamma = Gamma_trial(validTrial,tt);
+
+    % condition component
+    Ycond = Xv * B;   % trial x channel
+
+    % gamma component shared across channels
+    Ygamma = gamma * ones(1,nCh);
+
+    YHAT_condOnly_fromJoint(:,validTrial,tt) = Ycond';
+    YHAT_gammaOnly(:,validTrial,tt) = Ygamma';
+end
+%% Plot component reconstruction
+
+title_all = ['bkV OS'; 'bkA OS'; 'bkV SO'; 'bkA SO'; 'bkV OO'; 'bkA OO'];
+block_id  = [1,2,1,2,1,2];
+trial_all = [12,12,21,21,11,11];
+
+chList = [1 2 4];
+colors = lines(4);
+
+for ch = chList
+
+    fig = figure('Visible','on');
+
+    for id = 1:6
+        subplot(3,2,id); hold on
+
+        idx = BLOCK==block_id(id) & CLASS==trial_all(id);
+
+        if sum(idx) < 5
+            continue
+        end
+
+        raw_mu   = squeeze(mean(Y(ch,idx,:),2,'omitnan'));
+        cond_mu  = squeeze(mean(YHAT_condOnly_fromJoint(ch,idx,:),2,'omitnan'));
+        gamma_mu = squeeze(mean(YHAT_gammaOnly(ch,idx,:),2,'omitnan'));
+        full_mu  = squeeze(mean(YHAT_joint(ch,idx,:),2,'omitnan'));
+
+        plot(time_axis, raw_mu,   'Color',colors(1,:), 'LineWidth',1.5);
+        plot(time_axis, cond_mu,  'Color',colors(2,:), 'LineWidth',1.5);
+        plot(time_axis, gamma_mu, 'Color',colors(3,:), 'LineWidth',1.5);
+        plot(time_axis, full_mu,  'Color',colors(4,:), 'LineWidth',1.5);
+
+        xline(0,'k--');
+        title(title_all(id,:));
+        xlabel('Time (s)');
+        ylabel('LFP');
+
+        if id == 1
+            legend({'Raw','Condition only','Gamma only','Full'}, ...
+                'Location','best');
+        end
+    end
+
+    sgtitle(sprintf('Component reconstruction - Ch %d', ch));
+
+    outName = sprintf('ComponentReconstruction_Ch%d', ch);
+    savefig(fig, fullfile(figDir,[outName '.fig']));
+    exportgraphics(fig, fullfile(figDir,[outName '.png']), 'Resolution',300);
+end
+%% 3) High-gamma vs low-gamma trials
+
+gamma_win = time_axis >= 0.05 & time_axis <= 0.18;
+
+gamma_score = mean(Gamma_trial(:,gamma_win),2,'omitnan');
+
+hi_thr = prctile(gamma_score,75);
+lo_thr = prctile(gamma_score,25);
+
+highGamma = gamma_score >= hi_thr;
+lowGamma  = gamma_score <= lo_thr;
+%% Plot high vs low gamma raw traces
+
+title_all = ['bkV OS'; 'bkA OS'; 'bkV SO'; 'bkA SO'; 'bkV OO'; 'bkA OO'];
+block_id  = [1,2,1,2,1,2];
+trial_all = [12,12,21,21,11,11];
+
+chList = [1 2 4];
+
+for ch = chList
+
+    fig = figure('Visible','on');
+
+    for id = 1:6
+        subplot(3,2,id); hold on
+
+        idx_base = BLOCK==block_id(id) & CLASS==trial_all(id);
+
+        idx_hi = idx_base & highGamma;
+        idx_lo = idx_base & lowGamma;
+
+        if sum(idx_hi) < 5 || sum(idx_lo) < 5
+            continue
+        end
+
+        hi_mu = squeeze(mean(Y(ch,idx_hi,:),2,'omitnan'));
+        lo_mu = squeeze(mean(Y(ch,idx_lo,:),2,'omitnan'));
+
+        plot(time_axis, hi_mu, 'r', 'LineWidth',1.5);
+        plot(time_axis, lo_mu, 'b', 'LineWidth',1.5);
+
+        xline(0,'k--');
+        title(title_all(id,:));
+        xlabel('Time (s)');
+        ylabel('LFP');
+
+        if id == 1
+            legend({'High gamma','Low gamma'}, 'Location','best');
+        end
+    end
+
+    sgtitle(sprintf('High vs Low gamma trials - Ch %d', ch));
+
+    outName = sprintf('HighLowGamma_Ch%d', ch);
+    savefig(fig, fullfile(figDir,[outName '.fig']));
+    exportgraphics(fig, fullfile(figDir,[outName '.png']), 'Resolution',300);
+end
+
+%% Plot shared trial variability magnitude
+
+gamma_std = std(Gamma_trial,0,1,'omitnan');
+
+fig = figure('Visible','on');
+
+plot(time_axis, gamma_std, ...
+    'k', ...
+    'LineWidth',2);
+
+xline(0,'k--');
+
+xlabel('Time from stimulus onset (s)');
+ylabel('STD of \gamma_{trial}');
+
+title('Magnitude of shared trial-to-trial variability');
+
+outName = 'SharedTrialVariabilityMagnitude';
+
+savefig(fig, fullfile(figDir,[outName '.fig']));
+exportgraphics(fig, ...
+    fullfile(figDir,[outName '.png']), ...
+    'Resolution',300);
