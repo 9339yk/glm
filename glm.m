@@ -1,7 +1,13 @@
 % glm
 % merge all the trials from the same Rat
 % LK05 first
+%% Create output folder
 
+figDir = 'result_figure';
+
+if ~exist(figDir,'dir')
+    mkdir(figDir);
+end
 %%
 % load ('LOOKUP_crossmodal.mat');
 S = load('LK05_25_pooled_LFP_GLM_data.mat');
@@ -800,98 +806,139 @@ regressor_names = { ...
 nReg = size(Xglm,2);
 
 fprintf('rank(Xglm) = %d, nReg = %d\n', rank(Xglm), nReg);
-%% Cross-validated GLM with leave-one-channel-out global activity
+%% Joint multi-channel GLM with shared trial nuisance term
 
-% Y: channel x trial x time
-% Xglm: trial x task regressors
-% regressor_names: task regressor names
+% Y should be channel x trial x time
+Y = X;
 
-K = 5;
-
-nCh = size(Y,1);
+nCh    = size(Y,1);
 nTrial = size(Y,2);
-nTime = size(Y,3);
-nReg_task = size(Xglm,2);
+nTime  = size(Y,3);
 
-nReg_aug = nReg_task + 1;
+CLASS = CLASS(:);
+BLOCK = BLOCK(:);
 
-BETA_global_cv = nan(nCh,nReg_aug,nTime,K);
-YHAT_global_cv = nan(nCh,nTrial,nTime);
-R2_global_cv = nan(nCh,nTime);
+%% CLASS coding
+% 11 = A odd + V odd = OO
+% 12 = A odd + V std = OS
+% 21 = A std + V odd = SO
+% 22 = A std + V std = SS
 
-cv = cvpartition(nTrial,'KFold',K);
+Aud_odd = floor(CLASS/10) == 1;
+Aud_std = floor(CLASS/10) == 2;
 
-for ch = 1:nCh
+Vis_odd = mod(CLASS,10) == 1;
+Vis_std = mod(CLASS,10) == 2;
 
-    fprintf('CV GLM + global regressor: Channel %d\n', ch);
+%% BLOCK coding
+% 1 = Visual block
+% 2 = Auditory block
 
-    % leave-one-channel-out global signal
-    otherCh = setdiff(1:nCh,ch);
-    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));  
-    % GLOBAL: trial x time
+Block_Vis = BLOCK == 1;
+Block_Aud = BLOCK == 2;
 
-    Y_ch = squeeze(Y(ch,:,:));  % trial x time
+%% Condition regressors
 
-    for tt = 1:nTime
+% Bottom-up oddball difference
+% values: odd = +0.5, std = -0.5
+Aud_diff = 0.5 * (double(Aud_odd) - double(Aud_std));
+Vis_diff = 0.5 * (double(Vis_odd) - double(Vis_std));
 
-        y = Y_ch(:,tt);
-        y = y(:);
+% Attended stimulus terms
+Aud_std_x_Block_Aud = double(Aud_std & Block_Aud);
+Aud_odd_x_Block_Aud = double(Aud_odd & Block_Aud);
 
-        global_t = GLOBAL(:,tt);
-        global_t = global_t(:);
+Vis_std_x_Block_Vis = double(Vis_std & Block_Vis);
+Vis_odd_x_Block_Vis = double(Vis_odd & Block_Vis);
 
-        % z-score global regressor to make beta scale interpretable
-        global_t = zscore(global_t);
+Xcond = [ ...
+    Aud_diff(:), ...
+    Vis_diff(:), ...
+    Aud_std_x_Block_Aud(:), ...
+    Aud_odd_x_Block_Aud(:), ...
+    Vis_std_x_Block_Vis(:), ...
+    Vis_odd_x_Block_Vis(:)];
 
-        Xglm_aug = [Xglm, global_t];
+regressor_names = { ...
+    'Aud odd minus std bottom-up', ...
+    'Vis odd minus std bottom-up', ...
+    'Aud std x Aud block', ...
+    'Aud odd x Aud block', ...
+    'Vis std x Vis block', ...
+    'Vis odd x Vis block'};
 
-        validX = all(~isnan(Xglm_aug),2);
-        validX = validX(:);
+nReg = size(Xcond,2);
 
-        yhat = nan(nTrial,1);
+fprintf('rank(Xcond) = %d, nReg = %d\n', rank(Xcond), nReg);
+%% Fit joint model
 
-        for k = 1:K
+Beta_cond = nan(nCh,nReg,nTime);
+Gamma_trial = nan(nTrial,nTime);
+YHAT_joint = nan(nCh,nTrial,nTime);
+R2_joint = nan(nCh,nTime);
 
-            trainIdx = training(cv,k);
-            testIdx  = test(cv,k);
+for tt = 1:nTime
 
-            trainIdx = trainIdx(:);
-            testIdx  = testIdx(:);
+    % Ytt: trial x channel
+    Ytt = squeeze(Y(:,:,tt))';
 
-            validTrain = trainIdx & ~isnan(y) & validX;
-            validTest  = testIdx  & ~isnan(y) & validX;
+    validTrial = all(~isnan(Ytt),2) & all(~isnan(Xcond),2);
 
-            if sum(validTrain) <= nReg_aug || sum(validTest) < 2
-                continue
-            end
+    Xv = Xcond(validTrial,:);
+    Yv = Ytt(validTrial,:);
 
-            beta = Xglm_aug(validTrain,:) \ y(validTrain);
+    if sum(validTrial) <= nReg
+        continue
+    end
 
-            BETA_global_cv(ch,:,tt,k) = beta;
-            yhat(validTest) = Xglm_aug(validTest,:) * beta;
-        end
+    % 1. Fit condition betas for all channels
+    % B: regressor x channel
+    B = Xv \ Yv;
 
-        YHAT_global_cv(ch,:,tt) = yhat;
+    % 2. Residual after condition effects
+    R = Yv - Xv * B;
 
-        validEval = ~isnan(yhat) & ~isnan(y);
+    % 3. Shared trial nuisance term
+    % gamma: trial x 1
+    gamma = mean(R,2,'omitnan');
 
-        if sum(validEval) > 2
-            R2_global_cv(ch,tt) = 1 - sum((y(validEval)-yhat(validEval)).^2) / ...
-                                      sum((y(validEval)-mean(y(validEval))).^2);
-        end
+    % 4. Reconstruction
+    Yhat_v = Xv * B + gamma * ones(1,nCh);
+
+    % Store beta
+    Beta_cond(:,:,tt) = B';
+
+    % Store gamma
+    Gamma_trial(validTrial,tt) = gamma;
+
+    % Store prediction back as channel x trial x time
+    YHAT_joint(:,validTrial,tt) = Yhat_v';
+
+    % R2 per channel
+    for ch = 1:nCh
+        y = Ytt(validTrial,ch);
+        yhat = Yhat_v(:,ch);
+
+        R2_joint(ch,tt) = 1 - sum((y-yhat).^2) / ...
+                              sum((y-mean(y)).^2);
     end
 end
+save_name = [Rat '_' Date '_joint_GLM_sharedTrial.mat'];
 
-regressor_names_global = [regressor_names, {'Global activity'}];
-
-BETA_global = mean(BETA_global_cv,4,'omitnan');
-%% Plot beta kernels: each channel separately
-
-BETA_plot = BETA_global;  % or BETA / mean(BETA_cv,4,'omitnan')
-names_plot = regressor_names_global;  % or regressor_names
+save(save_name, ...
+    'Beta_cond', ...
+    'Gamma_trial', ...
+    'YHAT_joint', ...
+    'R2_joint', ...
+    'Xcond', ...
+    'regressor_names', ...
+    'time_axis', ...
+    'Rat', 'Date', 'files', ...
+    '-v7.3');
+%% Plot condition beta kernels by channel
 
 chList = [1 2 4];
-colors = lines(length(names_plot));
+colors = lines(nReg);
 
 fig = figure('Visible','on');
 
@@ -901,12 +948,12 @@ for ci = 1:length(chList)
 
     subplot(length(chList),1,ci); hold on
 
-    h = gobjects(length(names_plot),1);
+    h = gobjects(nReg,1);
 
-    for r = 1:length(names_plot)
-        h(r) = plot(time_axis, squeeze(BETA_plot(ch,r,:)), ...
+    for r = 1:nReg
+        h(r) = plot(time_axis, squeeze(Beta_cond(ch,r,:)), ...
             'Color', colors(r,:), ...
-            'LineWidth', 1.4);
+            'LineWidth',1.5);
     end
 
     xline(0,'k--');
@@ -917,165 +964,43 @@ for ci = 1:length(chList)
     ylabel('Beta');
 
     if ci == 1
-        legend(h, names_plot, 'Location','best');
+        legend(h, regressor_names, 'Location','best');
     end
 end
 
-sgtitle('GLM beta kernels by channel');
+sgtitle('Joint GLM condition beta kernels');
 
-outName = 'GLM_beta_by_channel';
-savefig(fig,[outName '.fig']);
-exportgraphics(fig,[outName '.png'],'Resolution',300);
-%% Plot global activity waveform
+outName = 'JointGLM_condition_beta_by_channel';
 
-chList = [1 2 4];
+savefig(fig, fullfile(figDir,[outName '.fig']));
 
-for ci = 1:length(chList)
+exportgraphics(fig, fullfile(figDir,[outName '.png']),'Resolution',300);
+%% Plot average shared trial nuisance gamma
 
-    ch = chList(ci);
+gamma_mu = mean(Gamma_trial,1,'omitnan');
+gamma_sem = std(Gamma_trial,0,1,'omitnan') / sqrt(size(Gamma_trial,1));
 
-    otherCh = setdiff(1:nCh,ch);
+fig = figure('Visible','on'); hold on
 
-    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));
-    % GLOBAL: trial x time
+fill([time_axis fliplr(time_axis)], ...
+     [gamma_mu+gamma_sem fliplr(gamma_mu-gamma_sem)], ...
+     [0.5 0.5 0.5], ...
+     'FaceAlpha',0.3, ...
+     'EdgeColor','none');
 
-    global_mu = mean(GLOBAL,1,'omitnan');
+plot(time_axis, gamma_mu, 'k', 'LineWidth',2);
 
-    global_sem = std(GLOBAL,0,1,'omitnan') ...
-                 / sqrt(size(GLOBAL,1));
+xline(0,'k--');
+yline(0,'k:');
 
-    fig = figure('Visible','on');
-    hold on
-
-    fill([time_axis fliplr(time_axis)], ...
-         [global_mu+global_sem ...
-          fliplr(global_mu-global_sem)], ...
-         [0.6 0.6 0.6], ...
-         'FaceAlpha',0.3, ...
-         'EdgeColor','none');
-
-    plot(time_axis, global_mu, ...
-        'k', ...
-        'LineWidth',2);
-
-    xline(0,'k--');
-
-    xlabel('Time from stimulus onset (s)');
-    ylabel('Global activity');
-
-    title(sprintf('Global activity regressor (predicting Ch %d)', ch));
-
-    %% save
-    outName = sprintf('GlobalActivity_predictCh%d', ch);
-
-    savefig(fig,[outName '.fig']);
-    exportgraphics(fig,[outName '.png'], ...
-        'Resolution',300);
-end
-%% Compare R2 before vs after adding global activity
-
-figure; hold on
-
-chList = [1 2 4];
-
-for ch = chList
-    plot(time_axis, R2_global_cv(ch,:) - R2_cv(ch,:), ...
-        'LineWidth',1.5);
-end
-
-yline(0,'k--');
 xlabel('Time from stimulus onset (s)');
-ylabel('\Delta CV R^2');
-legend(arrayfun(@(x) sprintf('Ch %d',x), chList, 'UniformOutput',false));
-title('R2 improvement after adding global activity');
-%% Reconstruct using global activity term only
+ylabel('\gamma_{trial}');
+title('Shared trial nuisance component');
+outName = 'JointGLM_shared_trial_gamma';
 
-BETA_global = mean(BETA_global_cv,4,'omitnan');
+savefig(fig, ...
+    fullfile(figDir,[outName '.fig']));
 
-r_intercept = 1;
-r_global = length(regressor_names_global);
-
-YHAT_globalOnly = nan(nCh,nTrial,nTime);
-YHAT_interceptGlobal = nan(nCh,nTrial,nTime);
-
-for ch = 1:nCh
-
-    otherCh = setdiff(1:nCh,ch);
-    GLOBAL = squeeze(mean(Y(otherCh,:,:),1,'omitnan'));  % trial x time
-
-    for tt = 1:nTime
-
-        global_t = GLOBAL(:,tt);
-        global_t = zscore(global_t);
-        global_t = global_t(:);
-
-        beta0 = BETA_global(ch,r_intercept,tt);
-        betaG = BETA_global(ch,r_global,tt);
-
-        % global contribution only
-        YHAT_globalOnly(ch,:,tt) = betaG .* global_t;
-
-        % intercept + global contribution
-        YHAT_interceptGlobal(ch,:,tt) = beta0 + betaG .* global_t;
-    end
-end
-%% Plot raw vs global-only reconstruction
-
-title_all = ['bkV OS'; ...
-             'bkA OS'; ...
-             'bkV SO'; ...
-             'bkA SO'; ...
-             'bkV OO'; ...
-             'bkA OO'];
-
-block_id  = [1,2,1,2,1,2];
-
-trial_all = [12,12,21,21,11,11];
-
-chList = [1 2 4];
-colors = lines(length(chList));
-
-fig = figure('Visible','on');
-
-for id = 1:6
-    subplot(3,2,id); hold on
-
-    for ci = 1:length(chList)
-        ch = chList(ci);
-
-        idx = BLOCK==block_id(id) & CLASS==trial_all(id);
-
-        if sum(idx) < 5
-            continue
-        end
-
-        raw_mu = squeeze(mean(Y(ch,idx,:),2,'omitnan'));
-        glob_mu = squeeze(mean(YHAT_interceptGlobal(ch,idx,:),2,'omitnan'));
-
-        plot(time_axis, raw_mu, ...
-            'Color', colors(ci,:), ...
-            'LineWidth', 1.5);
-
-        plot(time_axis, glob_mu, ...
-            'Color', colors(ci,:) + (1-colors(ci,:))*0.6, ...
-            'LineWidth', 1.5);
-    end
-
-    xline(0,'k--');
-    title(title_all(id,:));
-    xlabel('Time (s)');
-    ylabel('LFP');
-
-    if id == 1
-        legend({'Ch1 raw','Ch1 global', ...
-                'Ch2 raw','Ch2 global', ...
-                'Ch4 raw','Ch4 global'}, ...
-                'Location','best');
-    end
-end
-
-sgtitle('Raw vs intercept + global-only reconstruction');
-
-outName = 'GlobalOnly_reconstruction';
-savefig(fig,[outName '.fig']);
-exportgraphics(fig,[outName '.png'],'Resolution',300);
+exportgraphics(fig, ...
+    fullfile(figDir,[outName '.png']), ...
+    'Resolution',300);
